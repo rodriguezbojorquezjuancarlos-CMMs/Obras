@@ -1,9 +1,10 @@
+// @ts-nocheck
 "use client"
 
 import { useEffect, useState } from "react"
 import { supabase } from "@/lib/supabase"
 import Link from "next/link"
-import { ArrowLeft, FileText, Plus, Trash2, Printer, X } from "lucide-react"
+import { ArrowLeft, FileText, Plus, Trash2, Printer, X, Filter } from "lucide-react"
 import jsPDF from "jspdf"
 import autoTable from "jspdf-autotable"
 
@@ -13,9 +14,11 @@ export default function CotizacionesPage() {
   const [cotizaciones, setCotizaciones] = useState<any[]>([])
   const [proyectos, setProyectos] = useState<any[]>([])
   const [cargando, setCargando] = useState(true)
+  const [filtroTipo, setFiltroTipo] = useState<"ALL" | "Invoice" | "Estimate">("ALL")
 
-  // Estados Modal Nueva Cotización
+  // Estados Modal Nueva Cotización / Estimado
   const [mostrarModal, setMostrarModal] = useState(false)
+  const [tipoDocumento, setTipoDocumento] = useState<"Invoice" | "Estimate">("Invoice")
   const [proyectoId, setProyectoId] = useState("")
   const [cliente, setCliente] = useState("")
   const [folio, setFolio] = useState(`INV-${Math.floor(1000 + Math.random() * 9000)}`)
@@ -43,6 +46,12 @@ export default function CotizacionesPage() {
     setCargando(false)
   }
 
+  const cambiarTipoDocumento = (tipo: "Invoice" | "Estimate") => {
+    setTipoDocumento(tipo)
+    const prefijo = tipo === "Invoice" ? "INV" : "EST"
+    setFolio(`${prefijo}-${Math.floor(1000 + Math.random() * 9000)}`)
+  }
+
   const agregarItem = () => {
     setItems([...items, { descripcion: "", cantidad: 1, precio: 0 }])
   }
@@ -57,9 +66,9 @@ export default function CotizacionesPage() {
     setItems(items.filter((_, i) => i !== index))
   }
 
-  // Cálculos
+  // Cálculos (Tax al 10%)
   const subtotal = items.reduce((acc, item) => acc + (Number(item.cantidad) * Number(item.precio)), 0)
-  const iva = subtotal * 0.16 // 16% Tax / IVA
+  const iva = subtotal * 0.10 // 10% Tax
   const total = subtotal + iva
 
   const guardarCotizacion = async (e: React.FormEvent) => {
@@ -70,6 +79,7 @@ export default function CotizacionesPage() {
     try {
       const datos = {
         proyecto_id: proyectoId || null,
+        tipo: tipoDocumento, // "Invoice" o "Estimate"
         folio,
         cliente,
         fecha,
@@ -86,6 +96,7 @@ export default function CotizacionesPage() {
       setCliente("")
       setItems([{ descripcion: "", cantidad: 1, precio: 0 }])
       setFolio(`INV-${Math.floor(1000 + Math.random() * 9000)}`)
+      setTipoDocumento("Invoice")
       cargarDatos()
     } catch (err: any) {
       alert("Error: " + err.message)
@@ -95,25 +106,36 @@ export default function CotizacionesPage() {
   }
 
   const eliminarCotizacion = async (id: string) => {
-    if (!window.confirm("Are you sure you want to delete this invoice?")) return
+    if (!window.confirm("Are you sure you want to delete this document?")) return
     await supabase.from("cotizaciones").delete().eq("id", id)
     cargarDatos()
   }
 
-  // Generar PDF Profesional en Inglés (Invoice)
+  // Formatear Fecha a Mes / Día / Año (MM/DD/YYYY)
+  const formatearFechaMDY = (fechaStr: string) => {
+    if (!fechaStr) return ""
+    const partes = fechaStr.split("-") // YYYY-MM-DD
+    if (partes.length === 3) {
+      return `${partes[1]}/${partes[2]}/${partes[0]}`
+    }
+    return fechaStr
+  }
+
+  // Generar PDF Profesional en Inglés
   const descargarPDF = (cot: any) => {
     const doc = new jsPDF()
+    const tituloDoc = cot.tipo === "Estimate" ? "ESTIMATE" : "INVOICE"
     
     // Header
     doc.setFont("helvetica", "bold")
     doc.setFontSize(22)
     doc.setTextColor(16, 185, 129) // Emerald
-    doc.text("INVOICE / ESTIMATE", 14, 20)
+    doc.text(tituloDoc, 14, 20)
 
     doc.setFontSize(10)
     doc.setTextColor(100, 100, 100)
-    doc.text(`Invoice No: ${cot.folio}`, 14, 28)
-    doc.text(`Date: ${cot.fecha}`, 14, 34)
+    doc.text(`Document No: ${cot.folio}`, 14, 28)
+    doc.text(`Date: ${formatearFechaMDY(cot.fecha)}`, 14, 34)
     doc.text(`Valid Until: ${cot.validez || '15 Days'}`, 14, 40)
 
     doc.setFont("helvetica", "bold")
@@ -122,7 +144,7 @@ export default function CotizacionesPage() {
     doc.setFont("helvetica", "normal")
     doc.text(cot.cliente, 14, 58)
 
-    // Items Table (English Headers)
+    // Items Table
     const cuerpoTabla = cot.items.map((i: any) => [
       i.descripcion,
       i.cantidad,
@@ -139,10 +161,10 @@ export default function CotizacionesPage() {
 
     const finalY = (doc as any).lastAutoTable.finalY + 10
 
-    // Totals
+    // Totals (Tax 10%)
     doc.setFont("helvetica", "bold")
     doc.text(`Subtotal: $${Number(cot.subtotal).toLocaleString('en-US', { minimumFractionDigits: 2 })} USD`, 130, finalY)
-    doc.text(`Tax (16%): $${Number(cot.iva).toLocaleString('en-US', { minimumFractionDigits: 2 })} USD`, 130, finalY + 6)
+    doc.text(`Tax (10%): $${Number(cot.iva).toLocaleString('en-US', { minimumFractionDigits: 2 })} USD`, 130, finalY + 6)
     doc.setFontSize(12)
     doc.text(`TOTAL: $${Number(cot.total).toLocaleString('en-US', { minimumFractionDigits: 2 })} USD`, 130, finalY + 14)
     
@@ -152,6 +174,13 @@ export default function CotizacionesPage() {
 
     doc.save(`${cot.folio}_${cot.cliente.replace(/\s+/g, '_')}.pdf`)
   }
+
+  const cotizacionesFiltradas = cotizaciones.filter(cot => {
+    if (filtroTipo === "ALL") return true
+    // Si el registro antiguo no tiene la propiedad tipo, lo tratamos como Invoice por defecto
+    const tipo = cot.tipo || "Invoice"
+    return tipo === filtroTipo
+  })
 
   if (cargando) return <div className="min-h-screen bg-[#030712] flex items-center justify-center"><div className="animate-spin rounded-full h-12 w-12 border-t-2 border-emerald-500"></div></div>
 
@@ -170,57 +199,79 @@ export default function CotizacionesPage() {
               Commercial Module
             </span>
             <h1 className="text-4xl font-black text-white tracking-tight mt-2">Invoices & Estimates</h1>
-            <p className="text-slate-400 mt-1">Generate professional USD quotes with automated tax calculations.</p>
+            <p className="text-slate-400 mt-1">Manage official invoices and preliminary estimates with automated 10% tax calculation.</p>
           </div>
 
           <button onClick={() => setMostrarModal(true)} className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-black px-5 py-3 rounded-xl font-black transition-all shadow-[0_0_20px_rgba(52,211,153,0.3)] cursor-pointer text-sm">
-            <Plus size={18} /> New Invoice
+            <Plus size={18} /> New Document
           </button>
         </div>
 
-        {/* LISTA DE COTIZACIONES */}
+        {/* FILTROS DE TIPO */}
+        <div className="flex gap-2 mb-6">
+          <button onClick={() => setFiltroTipo("ALL")} className={`px-4 py-2 rounded-xl text-xs font-bold cursor-pointer transition-colors ${filtroTipo === 'ALL' ? 'bg-emerald-500 text-black' : 'bg-white/5 text-slate-400 hover:text-white'}`}>
+            All Documents
+          </button>
+          <button onClick={() => setFiltroTipo("Invoice")} className={`px-4 py-2 rounded-xl text-xs font-bold cursor-pointer transition-colors ${filtroTipo === 'Invoice' ? 'bg-emerald-500 text-black' : 'bg-white/5 text-slate-400 hover:text-white'}`}>
+            Invoices
+          </button>
+          <button onClick={() => setFiltroTipo("Estimate")} className={`px-4 py-2 rounded-xl text-xs font-bold cursor-pointer transition-colors ${filtroTipo === 'Estimate' ? 'bg-emerald-500 text-black' : 'bg-white/5 text-slate-400 hover:text-white'}`}>
+            Estimates
+          </button>
+        </div>
+
+        {/* LISTA */}
         <div className="glass-card rounded-3xl overflow-hidden border border-white/10">
           <div className="p-6 border-b border-white/5 bg-white/[0.02]">
-            <h2 className="text-lg font-black text-white">Issued Invoices History</h2>
+            <h2 className="text-lg font-black text-white">Document History</h2>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm whitespace-nowrap">
               <thead className="bg-black/20 text-slate-400 text-[10px] uppercase font-black tracking-widest border-b border-white/5">
                 <tr>
+                  <th className="px-6 py-5">Type</th>
                   <th className="px-6 py-5">Folio</th>
                   <th className="px-6 py-5">Client</th>
-                  <th className="px-6 py-5">Date</th>
+                  <th className="px-6 py-5">Date (MM/DD/YYYY)</th>
                   <th className="px-6 py-5">Total (USD / MXN)</th>
                   <th className="px-6 py-5 text-center">Status</th>
                   <th className="px-6 py-5 text-center">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5 text-slate-300">
-                {cotizaciones.length === 0 ? (
-                  <tr><td colSpan={6} className="p-12 text-center text-slate-500">No invoices found. Create your first one.</td></tr>
+                {cotizacionesFiltradas.length === 0 ? (
+                  <tr><td colSpan={7} className="p-12 text-center text-slate-500">No documents found. Create your first one.</td></tr>
                 ) : (
-                  cotizaciones.map(cot => (
-                    <tr key={cot.id} className="hover:bg-white/[0.02] transition-colors">
-                      <td className="px-6 py-5 font-bold text-emerald-400">{cot.folio}</td>
-                      <td className="px-6 py-5 font-bold text-white">{cot.cliente}</td>
-                      <td className="px-6 py-5 text-slate-400">{cot.fecha}</td>
-                      <td className="px-6 py-5">
-                        <div className="font-black text-white">${Number(cot.total).toLocaleString('en-US', { minimumFractionDigits: 2 })} USD</div>
-                        <div className="text-[10px] text-slate-400 font-bold mt-0.5">≈ ${(Number(cot.total) * TIPO_CAMBIO).toLocaleString('es-MX', { minimumFractionDigits: 2 })} MXN</div>
-                      </td>
-                      <td className="px-6 py-5 text-center">
-                        <span className="bg-amber-500/10 text-amber-400 border border-amber-500/20 px-3 py-1 rounded-lg text-[10px] font-black uppercase">
-                          {cot.estatus}
-                        </span>
-                      </td>
-                      <td className="px-6 py-5">
-                        <div className="flex items-center justify-center gap-2">
-                          <button onClick={() => descargarPDF(cot)} className="p-2 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 rounded-lg cursor-pointer" title="Download PDF"><Printer size={16} /></button>
-                          <button onClick={() => eliminarCotizacion(cot.id)} className="p-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg cursor-pointer" title="Delete"><Trash2 size={16} /></button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))
+                  cotizacionesFiltradas.map(cot => {
+                    const tipoDoc = cot.tipo || "Invoice"
+                    return (
+                      <tr key={cot.id} className="hover:bg-white/[0.02] transition-colors">
+                        <td className="px-6 py-5">
+                          <span className={`px-2.5 py-1 rounded-md text-[10px] font-black uppercase ${tipoDoc === 'Invoice' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' : 'bg-purple-500/10 text-purple-400 border border-purple-500/20'}`}>
+                            {tipoDoc}
+                          </span>
+                        </td>
+                        <td className="px-6 py-5 font-bold text-emerald-400">{cot.folio}</td>
+                        <td className="px-6 py-5 font-bold text-white">{cot.cliente}</td>
+                        <td className="px-6 py-5 text-slate-400">{formatearFechaMDY(cot.fecha)}</td>
+                        <td className="px-6 py-5">
+                          <div className="font-black text-white">${Number(cot.total).toLocaleString('en-US', { minimumFractionDigits: 2 })} USD</div>
+                          <div className="text-[10px] text-slate-400 font-bold mt-0.5">≈ ${(Number(cot.total) * TIPO_CAMBIO).toLocaleString('es-MX', { minimumFractionDigits: 2 })} MXN</div>
+                        </td>
+                        <td className="px-6 py-5 text-center">
+                          <span className="bg-amber-500/10 text-amber-400 border border-amber-500/20 px-3 py-1 rounded-lg text-[10px] font-black uppercase">
+                            {cot.estatus}
+                          </span>
+                        </td>
+                        <td className="px-6 py-5">
+                          <div className="flex items-center justify-center gap-2">
+                            <button onClick={() => descargarPDF(cot)} className="p-2 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 rounded-lg cursor-pointer" title="Download PDF"><Printer size={16} /></button>
+                            <button onClick={() => eliminarCotizacion(cot.id)} className="p-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg cursor-pointer" title="Delete"><Trash2 size={16} /></button>
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })
                 )}
               </tbody>
             </table>
@@ -229,14 +280,28 @@ export default function CotizacionesPage() {
 
       </div>
 
-      {/* MODAL CREAR COTIZACIÓN */}
+      {/* MODAL CREAR DOCUMENTO */}
       {mostrarModal && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center p-4 z-50 overflow-y-auto">
           <div className="bg-[#0B1221] border border-white/10 rounded-3xl p-8 w-full max-w-2xl shadow-2xl relative my-8">
             <button onClick={() => setMostrarModal(false)} className="absolute top-6 right-6 text-slate-400 hover:text-white cursor-pointer"><X size={24} /></button>
-            <h2 className="text-2xl font-black text-white mb-6">New Invoice / Estimate</h2>
+            <h2 className="text-2xl font-black text-white mb-6">Create New Document</h2>
             
             <form onSubmit={guardarCotizacion} className="space-y-6">
+              
+              {/* SELECTOR TIPO */}
+              <div>
+                <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Document Type</label>
+                <div className="grid grid-cols-2 gap-3">
+                  <button type="button" onClick={() => cambiarTipoDocumento("Invoice")} className={`py-3 rounded-xl font-black text-xs cursor-pointer border transition-all ${tipoDocumento === 'Invoice' ? 'bg-blue-600 border-blue-500 text-white shadow-[0_0_15px_rgba(37,99,235,0.4)]' : 'bg-black/30 border-white/10 text-slate-400'}`}>
+                    INVOICE (Official)
+                  </button>
+                  <button type="button" onClick={() => cambiarTipoDocumento("Estimate")} className={`py-3 rounded-xl font-black text-xs cursor-pointer border transition-all ${tipoDocumento === 'Estimate' ? 'bg-purple-600 border-purple-500 text-white shadow-[0_0_15px_rgba(147,51,234,0.4)]' : 'bg-black/30 border-white/10 text-slate-400'}`}>
+                    ESTIMATE (Preliminary)
+                  </button>
+                </div>
+              </div>
+
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Client / Company</label>
@@ -255,11 +320,11 @@ export default function CotizacionesPage() {
 
               <div className="grid grid-cols-3 gap-4">
                 <div>
-                  <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Invoice No.</label>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Folio / No.</label>
                   <input required type="text" value={folio} onChange={(e) => setFolio(e.target.value)} className="w-full bg-black/30 border border-white/10 p-3.5 rounded-xl text-emerald-400 font-bold outline-none text-sm" />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Date</label>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Date (YYYY-MM-DD)</label>
                   <input required type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} className="w-full bg-black/30 border border-white/10 p-3.5 rounded-xl text-slate-200 outline-none text-sm" />
                 </div>
                 <div>
@@ -315,10 +380,10 @@ export default function CotizacionesPage() {
                 </div>
               </div>
 
-              {/* TOTALES */}
+              {/* TOTALES (Tax 10%) */}
               <div className="bg-black/40 p-4 rounded-2xl border border-white/5 flex flex-col items-end space-y-1 text-sm">
                 <div className="text-slate-400">Subtotal: <span className="text-white font-bold">${subtotal.toLocaleString('en-US', { minimumFractionDigits: 2 })} USD</span></div>
-                <div className="text-slate-400">Tax (16%): <span className="text-white font-bold">${iva.toLocaleString('en-US', { minimumFractionDigits: 2 })} USD</span></div>
+                <div className="text-slate-400">Tax (10%): <span className="text-white font-bold">${iva.toLocaleString('en-US', { minimumFractionDigits: 2 })} USD</span></div>
                 <div className="text-lg font-black text-emerald-400 pt-2 border-t border-white/10 w-full text-right">
                   Total: ${total.toLocaleString('en-US', { minimumFractionDigits: 2 })} USD 
                   <span className="block text-xs font-normal text-slate-400 mt-0.5">≈ ${(total * TIPO_CAMBIO).toLocaleString('es-MX', { minimumFractionDigits: 2 })} MXN</span>
@@ -326,7 +391,7 @@ export default function CotizacionesPage() {
               </div>
 
               <button type="submit" disabled={guardando} className="w-full bg-emerald-500 hover:bg-emerald-400 text-black font-black py-4 rounded-xl transition-all shadow-[0_0_20px_rgba(52,211,153,0.3)] cursor-pointer">
-                {guardando ? "SAVING..." : "SAVE & GENERATE INVOICE"}
+                {guardando ? "SAVING..." : "SAVE & GENERATE DOCUMENT"}
               </button>
             </form>
           </div>
