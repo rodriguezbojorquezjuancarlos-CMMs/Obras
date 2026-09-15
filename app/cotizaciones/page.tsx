@@ -4,7 +4,7 @@
 import { useEffect, useState } from "react"
 import { supabase } from "@/lib/supabase"
 import Link from "next/link"
-import { ArrowLeft, FileText, Plus, Trash2, Printer, X, Filter } from "lucide-react"
+import { ArrowLeft, FileText, Plus, Trash2, Printer, X } from "lucide-react"
 import jsPDF from "jspdf"
 import autoTable from "jspdf-autotable"
 
@@ -16,7 +16,7 @@ export default function CotizacionesPage() {
   const [cargando, setCargando] = useState(true)
   const [filtroTipo, setFiltroTipo] = useState<"ALL" | "Invoice" | "Estimate">("ALL")
 
-  // Estados Modal Nueva Cotización / Estimado
+  // Modal States
   const [mostrarModal, setMostrarModal] = useState(false)
   const [tipoDocumento, setTipoDocumento] = useState<"Invoice" | "Estimate">("Invoice")
   const [proyectoId, setProyectoId] = useState("")
@@ -25,7 +25,7 @@ export default function CotizacionesPage() {
   const [fecha, setFecha] = useState(new Date().toISOString().split('T')[0])
   const [validez, setValidez] = useState("15 Days")
   
-  // Items de la cotización
+  // Invoice Items
   const [items, setItems] = useState<{ descripcion: string; cantidad: number; precio: number }[]>([
     { descripcion: "Installation and labor", cantidad: 1, precio: 0 }
   ])
@@ -66,7 +66,7 @@ export default function CotizacionesPage() {
     setItems(items.filter((_, i) => i !== index))
   }
 
-  // Cálculos (Tax al 10%)
+  // Calculations (Tax at 10%)
   const subtotal = items.reduce((acc, item) => acc + (Number(item.cantidad) * Number(item.precio)), 0)
   const iva = subtotal * 0.10 // 10% Tax
   const total = subtotal + iva
@@ -79,7 +79,7 @@ export default function CotizacionesPage() {
     try {
       const datos = {
         proyecto_id: proyectoId || null,
-        tipo: tipoDocumento, // "Invoice" o "Estimate"
+        tipo: tipoDocumento,
         folio,
         cliente,
         fecha,
@@ -88,10 +88,12 @@ export default function CotizacionesPage() {
         subtotal,
         iva,
         total,
-        estatus: "Pending"
+        estatus: "PENDING"
       }
 
-      await supabase.from("cotizaciones").insert([datos])
+      const { error } = await supabase.from("cotizaciones").insert([datos])
+      if (error) throw error
+
       setMostrarModal(false)
       setCliente("")
       setItems([{ descripcion: "", cantidad: 1, precio: 0 }])
@@ -111,40 +113,75 @@ export default function CotizacionesPage() {
     cargarDatos()
   }
 
-  // Formatear Fecha a Mes / Día / Año (MM/DD/YYYY)
   const formatearFechaMDY = (fechaStr: string) => {
     if (!fechaStr) return ""
-    const partes = fechaStr.split("-") // YYYY-MM-DD
+    const partes = fechaStr.split("-") 
     if (partes.length === 3) {
       return `${partes[1]}/${partes[2]}/${partes[0]}`
     }
     return fechaStr
   }
 
-  // Generar PDF Profesional en Inglés
-  const descargarPDF = (cot: any) => {
+  // --- FUNCIÓN ASÍNCRONA PARA CARGAR LA IMAGEN SEGURO ---
+  const cargarLogoBase64 = (): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const img = new window.Image()
+      img.crossOrigin = "Anonymous" // Evita errores de permisos del navegador
+      img.onload = () => {
+        const canvas = document.createElement("canvas")
+        canvas.width = img.width
+        canvas.height = img.height
+        const ctx = canvas.getContext("2d")
+        if (ctx) {
+          ctx.drawImage(img, 0, 0)
+          resolve(canvas.toDataURL("image/png")) // Retorna el Base64 listo
+        } else {
+          reject("No se pudo inicializar el Canvas")
+        }
+      }
+      img.onerror = (err) => reject(err)
+      img.src = "/logo.png" // Ruta de tu archivo en public/
+    })
+  }
+
+  // --- GENERACIÓN DEL PDF ---
+  const descargarPDF = async (cot: any) => {
     const doc = new jsPDF()
     const tituloDoc = cot.tipo === "Estimate" ? "ESTIMATE" : "INVOICE"
-    
-    // Header
+
+    // 1. INTENTAR CARGAR EL LOGO PRIMERO Y ESPERAR A QUE TERMINE
+    try {
+      const logoData = await cargarLogoBase64()
+      // X=14, Y=10, Ancho=60, Alto=20
+      doc.addImage(logoData, 'PNG', 14, 8, 60, 25.6)
+    } catch (error) {
+      console.warn("No se pudo cargar el logo al PDF, generando sin logo...", error)
+    }
+
+    // 2. TÍTULO DEL DOCUMENTO
     doc.setFont("helvetica", "bold")
     doc.setFontSize(22)
     doc.setTextColor(16, 185, 129) // Emerald
-    doc.text(tituloDoc, 14, 20)
+    doc.text(tituloDoc, 196, 20, { align: 'right' })
 
     doc.setFontSize(10)
     doc.setTextColor(100, 100, 100)
-    doc.text(`Document No: ${cot.folio}`, 14, 28)
-    doc.text(`Date: ${formatearFechaMDY(cot.fecha)}`, 14, 34)
-    doc.text(`Valid Until: ${cot.validez || '15 Days'}`, 14, 40)
+    doc.text(`Document No: ${cot.folio}`, 196, 27, { align: 'right' })
+    doc.text(`Date: ${formatearFechaMDY(cot.fecha)}`, 196, 33, { align: 'right' })
+    doc.text(`Valid Until: ${cot.validez || '15 Days'}`, 196, 39, { align: 'right' })
 
+    // 3. LÍNEA DIVISORA
+    doc.setDrawColor(200, 200, 200)
+    doc.line(14, 46, 196, 46)
+
+    // 4. DATOS DEL CLIENTE
     doc.setFont("helvetica", "bold")
     doc.setTextColor(0, 0, 0)
-    doc.text("BILLED TO:", 14, 52)
+    doc.text("BILLED TO:", 14, 55)
     doc.setFont("helvetica", "normal")
-    doc.text(cot.cliente, 14, 58)
+    doc.text(cot.cliente, 14, 61)
 
-    // Items Table
+    // 5. TABLA DE CONCEPTOS
     const cuerpoTabla = cot.items.map((i: any) => [
       i.descripcion,
       i.cantidad,
@@ -155,29 +192,30 @@ export default function CotizacionesPage() {
     autoTable(doc, {
       head: [['Description', 'Qty', 'Unit Price', 'Amount']],
       body: cuerpoTabla,
-      startY: 65,
+      startY: 70,
       headStyles: { fillColor: [16, 185, 129] }
     })
 
     const finalY = (doc as any).lastAutoTable.finalY + 10
 
-    // Totals (Tax 10%)
+    // 6. TOTALES (Tax 10%)
     doc.setFont("helvetica", "bold")
-    doc.text(`Subtotal: $${Number(cot.subtotal).toLocaleString('en-US', { minimumFractionDigits: 2 })} USD`, 130, finalY)
-    doc.text(`Tax (10%): $${Number(cot.iva).toLocaleString('en-US', { minimumFractionDigits: 2 })} USD`, 130, finalY + 6)
+    doc.text(`Subtotal: $${Number(cot.subtotal).toLocaleString('en-US', { minimumFractionDigits: 2 })} USD`, 196, finalY, { align: 'right' })
+    doc.text(`Tax (10%): $${Number(cot.iva).toLocaleString('en-US', { minimumFractionDigits: 2 })} USD`, 196, finalY + 6, { align: 'right' })
     doc.setFontSize(12)
-    doc.text(`TOTAL: $${Number(cot.total).toLocaleString('en-US', { minimumFractionDigits: 2 })} USD`, 130, finalY + 14)
+    doc.text(`TOTAL: $${Number(cot.total).toLocaleString('en-US', { minimumFractionDigits: 2 })} USD`, 196, finalY + 14, { align: 'right' })
     
     doc.setFontSize(9)
     doc.setTextColor(120, 120, 120)
-    doc.text(`Approx. MXN equivalent (Ex. Rate ${TIPO_CAMBIO}): $${(Number(cot.total) * TIPO_CAMBIO).toLocaleString('es-MX', { minimumFractionDigits: 2 })} MXN`, 130, finalY + 22)
+    doc.text(`Approx. MXN equivalent (Ex. Rate ${TIPO_CAMBIO}): $${(Number(cot.total) * TIPO_CAMBIO).toLocaleString('es-MX', { minimumFractionDigits: 2 })} MXN`, 196, finalY + 22, { align: 'right' })
 
+    // 7. DESCARGAR
     doc.save(`${cot.folio}_${cot.cliente.replace(/\s+/g, '_')}.pdf`)
   }
+  // ------------------------------
 
   const cotizacionesFiltradas = cotizaciones.filter(cot => {
     if (filtroTipo === "ALL") return true
-    // Si el registro antiguo no tiene la propiedad tipo, lo tratamos como Invoice por defecto
     const tipo = cot.tipo || "Invoice"
     return tipo === filtroTipo
   })
@@ -207,7 +245,7 @@ export default function CotizacionesPage() {
           </button>
         </div>
 
-        {/* FILTROS DE TIPO */}
+        {/* TYPE FILTERS */}
         <div className="flex gap-2 mb-6">
           <button onClick={() => setFiltroTipo("ALL")} className={`px-4 py-2 rounded-xl text-xs font-bold cursor-pointer transition-colors ${filtroTipo === 'ALL' ? 'bg-emerald-500 text-black' : 'bg-white/5 text-slate-400 hover:text-white'}`}>
             All Documents
@@ -220,7 +258,7 @@ export default function CotizacionesPage() {
           </button>
         </div>
 
-        {/* LISTA */}
+        {/* DOCUMENTS LIST */}
         <div className="glass-card rounded-3xl overflow-hidden border border-white/10">
           <div className="p-6 border-b border-white/5 bg-white/[0.02]">
             <h2 className="text-lg font-black text-white">Document History</h2>
@@ -280,7 +318,7 @@ export default function CotizacionesPage() {
 
       </div>
 
-      {/* MODAL CREAR DOCUMENTO */}
+      {/* CREATE NEW DOCUMENT MODAL */}
       {mostrarModal && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center p-4 z-50 overflow-y-auto">
           <div className="bg-[#0B1221] border border-white/10 rounded-3xl p-8 w-full max-w-2xl shadow-2xl relative my-8">
@@ -289,7 +327,6 @@ export default function CotizacionesPage() {
             
             <form onSubmit={guardarCotizacion} className="space-y-6">
               
-              {/* SELECTOR TIPO */}
               <div>
                 <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Document Type</label>
                 <div className="grid grid-cols-2 gap-3">
@@ -324,7 +361,7 @@ export default function CotizacionesPage() {
                   <input required type="text" value={folio} onChange={(e) => setFolio(e.target.value)} className="w-full bg-black/30 border border-white/10 p-3.5 rounded-xl text-emerald-400 font-bold outline-none text-sm" />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Date (YYYY-MM-DD)</label>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Date (MM/DD/YYYY)</label>
                   <input required type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} className="w-full bg-black/30 border border-white/10 p-3.5 rounded-xl text-slate-200 outline-none text-sm" />
                 </div>
                 <div>
@@ -333,7 +370,7 @@ export default function CotizacionesPage() {
                 </div>
               </div>
 
-              {/* CONCEPTOS / ITEMS */}
+              {/* ITEMS SECTION */}
               <div className="border-t border-white/10 pt-4">
                 <div className="flex justify-between items-center mb-4">
                   <h3 className="text-white font-bold text-sm uppercase">Items & Services (USD)</h3>
@@ -380,7 +417,7 @@ export default function CotizacionesPage() {
                 </div>
               </div>
 
-              {/* TOTALES (Tax 10%) */}
+              {/* TOTALS */}
               <div className="bg-black/40 p-4 rounded-2xl border border-white/5 flex flex-col items-end space-y-1 text-sm">
                 <div className="text-slate-400">Subtotal: <span className="text-white font-bold">${subtotal.toLocaleString('en-US', { minimumFractionDigits: 2 })} USD</span></div>
                 <div className="text-slate-400">Tax (10%): <span className="text-white font-bold">${iva.toLocaleString('en-US', { minimumFractionDigits: 2 })} USD</span></div>
